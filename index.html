@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Turn-by-Turn Directions Map</title>
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <!-- Routing Machine CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.css" />
+
+  <style>
+    * { box-sizing: border-box; }
+    body, html {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      font-family: Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+    }
+    #controls {
+      padding: 8px;
+      background: #f4f4f4;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+      z-index: 1000;
+    }
+    #controls input {
+      padding: 10px;
+      width: 250px;
+      max-width: 100%;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      font-size: 1rem;
+      flex: 1;
+    }
+    #controls button {
+      padding: 10px 16px;
+      cursor: pointer;
+      border: none;
+      background: #007bff;
+      color: white;
+      border-radius: 6px;
+      font-size: 1rem;
+      flex-shrink: 0;
+    }
+    #controls button:hover {
+      background: #0056b3;
+    }
+    #map {
+      flex: 1;
+      width: 100%;
+      position: relative;
+    }
+
+    /* Floating locate button */
+    #locate-btn {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      z-index: 1001;
+      background: white;
+      border: 2px solid #007bff;
+      border-radius: 50%;
+      width: 50px;
+      height: 50px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+      transition: background 0.2s;
+    }
+    #locate-btn:hover { background: #f0f0f0; }
+    #locate-btn img { width: 24px; height: 24px; }
+
+    /* Turn-by-turn instructions panel */
+    #directions {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      z-index: 1001;
+      background: white;
+      border: 1px solid #ccc;
+      border-radius: 10px;
+      width: 280px;
+      max-height: 40%;
+      overflow-y: auto;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+      padding: 10px;
+      font-size: 0.9rem;
+    }
+    #directions h3 {
+      margin: 0 0 6px 0;
+      font-size: 1rem;
+      color: #007bff;
+    }
+    #summary {
+      font-weight: bold;
+      margin-bottom: 8px;
+    }
+
+    /* Mobile adjustments */
+    @media (max-width: 600px) {
+      #controls {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      #controls input, #controls button {
+        width: 100%;
+        font-size: 1.1rem;
+      }
+      #directions {
+        width: 90%;
+        left: 50%;
+        transform: translateX(-50%);
+        bottom: 80px;
+        max-height: 30%;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div id="controls">
+    <input type="text" id="destination" placeholder="Enter destination" list="suggestions" oninput="getSuggestions(this.value)" />
+    <datalist id="suggestions"></datalist>
+    <button onclick="routeToDestination()">Get Directions</button>
+  </div>
+  <div id="map">
+    <div id="locate-btn" onclick="centerOnLocation()">
+      <img src="https://cdn-icons-png.flaticon.com/512/684/684908.png" alt="Locate Me">
+    </div>
+    <div id="directions">
+      <h3>Directions</h3>
+      <div id="summary">No route yet.</div>
+      <div id="steps"></div>
+    </div>
+  </div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <!-- Routing Machine JS -->
+  <script src="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.js"></script>
+
+  <script>
+    let map = L.map('map').setView([20.5937, 78.9629], 5);
+    let control; 
+    let myLocation;
+    let startMarker, destMarker;
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    // Live tracking of current location
+    if (navigator.geolocation) {
+      navigator.geolocation.watchPosition(pos => {
+        myLocation = [pos.coords.latitude, pos.coords.longitude];
+
+        if (!startMarker) {
+          startMarker = L.marker(myLocation, {icon: L.icon({
+            iconUrl: "https://cdn-icons-png.flaticon.com/512/64/64113.png",
+            iconSize: [20, 20]
+          })}).addTo(map).bindPopup("📍 You are here").openPopup();
+          map.setView(myLocation, 15);
+        } else {
+          startMarker.setLatLng(myLocation);
+        }
+
+        if (control) {
+          let waypoints = control.getWaypoints();
+          waypoints[0].latLng = L.latLng(myLocation[0], myLocation[1]);
+          control.setWaypoints(waypoints);
+        }
+      }, () => {
+        alert("⚠️ Location access denied.");
+      }, { enableHighAccuracy: true });
+    }
+
+    function centerOnLocation() {
+      if (myLocation) {
+        map.setView(myLocation, 15, { animate: true });
+        if (startMarker) startMarker.openPopup();
+      } else {
+        alert("⚠️ Current location not available yet.");
+      }
+    }
+
+    function getSuggestions(query) {
+      if (query.length < 3) return;
+      fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&addressdetails=1&limit=5`)
+        .then(res => res.json())
+        .then(data => {
+          let datalist = document.getElementById("suggestions");
+          datalist.innerHTML = "";
+          data.forEach(place => {
+            let option = document.createElement("option");
+            option.value = place.display_name;
+            datalist.appendChild(option);
+          });
+        });
+    }
+
+    function geocode(place, callback) {
+      fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(place)}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.length > 0) {
+            callback([parseFloat(data[0].lat), parseFloat(data[0].lon)]);
+          } else {
+            alert("❌ Place not found: " + place);
+          }
+        })
+        .catch(() => alert("⚠️ Geocoding error"));
+    }
+
+    function formatTime(seconds) {
+      let mins = Math.round(seconds / 60);
+      if (mins < 60) return mins + " min";
+      let hrs = Math.floor(mins / 60);
+      let rem = mins % 60;
+      return hrs + " hr " + (rem > 0 ? rem + " min" : "");
+    }
+
+    function routeToDestination() {
+      const destPlace = document.getElementById("destination").value;
+      if (!destPlace) {
+        alert("Please enter a destination!");
+        return;
+      }
+      if (!myLocation) {
+        alert("⚠️ Current location not available yet.");
+        return;
+      }
+
+      geocode(destPlace, function(destCoords) {
+        if (control) map.removeControl(control);
+        if (destMarker) map.removeLayer(destMarker);
+
+        destMarker = L.marker(destCoords).addTo(map).bindPopup("🎯 Destination").openPopup();
+
+        control = L.Routing.control({
+          waypoints: [
+            L.latLng(myLocation[0], myLocation[1]),
+            L.latLng(destCoords[0], destCoords[1])
+          ],
+          addWaypoints: false,
+          draggableWaypoints: false,
+          routeWhileDragging: false,
+          createMarker: function() { return null; }, // no extra markers
+          show: false // hide built-in panel
+        }).addTo(map);
+
+        control.on('routesfound', function(e) {
+          const summaryDiv = document.getElementById("summary");
+          const stepsDiv = document.getElementById("steps");
+          stepsDiv.innerHTML = "";
+
+          let route = e.routes[0];
+          let dist = (route.summary.totalDistance / 1000).toFixed(1) + " km";
+          let time = formatTime(route.summary.totalTime);
+          summaryDiv.textContent = `Total: ${dist}, ${time}`;
+
+          route.instructions.forEach((inst, i) => {
+            let div = document.createElement("div");
+            div.textContent = (i+1) + ". " + inst.text;
+            stepsDiv.appendChild(div);
+          });
+        });
+
+        map.fitBounds([myLocation, destCoords]);
+      });
+    }
+  </script>
+</body>
+</html>
